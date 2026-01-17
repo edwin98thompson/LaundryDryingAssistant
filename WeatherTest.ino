@@ -37,6 +37,8 @@ const char *POP = "abcd1234";         // Proof-of-Possession PIN
 const char *SERVICE_NAME = "PROV_1";  // BLE name (must start with PROV_)
 const char *SERVICE_KEY = NULL;       // Not used for BLE
 
+const float RAIN_THRESHOLD_MM = 0.1;
+
 // Set true ONLY for factory reset builds
 bool RESET_PROVISIONED = false;
 
@@ -65,6 +67,11 @@ double currentTempC = NAN;
 double currentHumidity = NAN;
 double currentWindMS = NAN;
 double currentPrecipMM = NAN;
+double currentRadiation = NAN;
+double currentEt0 = NAN;
+bool rainInNext2Hours = false;
+
+int dryingScore = 0;
 
 char timeBuf[24];
 
@@ -225,7 +232,7 @@ void syncTime() {
 }
 
 // Call this after wifiReady is true
-void fetchWeather(double lat, double lon) {
+void fetchWeather() {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[WEATHER] Wi-Fi not connected");
@@ -234,10 +241,17 @@ void fetchWeather(double lat, double lon) {
 
   // Construct URL using lat/lon
   String url = "https://api.open-meteo.com/v1/forecast?";
-  url += "latitude=" + String(lat, 6);
-  url += "&longitude=" + String(lon, 6);
-  url += "&hourly=temperature_2m,relative_humidity_2m,windspeed_10m,precipitation";
-  url += "&daily=temperature_2m_max,temperature_2m_min";
+  url += "latitude=" + String(latitude, 6);
+  url += "&longitude=" + String(longitude, 6);
+
+  // Hourly variables required for drying score
+  url += "&hourly=";
+  url += "temperature_2m,";
+  url += "relative_humidity_2m,";
+  url += "wind_speed_10m,";
+  url += "precipitation,";
+  url += "shortwave_radiation,";
+  url += "et0_fao_evapotranspiration";
   url += "&temperature_unit=celsius&timezone=auto";
 
   HTTPClient http;
@@ -276,6 +290,8 @@ void fetchWeather(double lat, double lon) {
   JsonArray winds = doc["hourly"]["windspeed_10m"].as<JsonArray>();
   JsonArray humidities = doc["hourly"]["relative_humidity_2m"].as<JsonArray>();
   JsonArray precip = doc["hourly"]["precipitation"].as<JsonArray>();
+  JsonArray radiation = doc["hourly"]["shortwave_radiation"].as<JsonArray>();
+  JsonArray et0_values = doc["hourly"]["et0_fao_evapotranspiration"].as<JsonArray>();
 
   Serial.println("[WEATHER] Next 5 hours:");
   // Ensure we don't go out of bounds
@@ -288,13 +304,84 @@ void fetchWeather(double lat, double lon) {
                   precip[i].as<double>());
   }
 
+  rainInNext2Hours = false;
+
+  for (size_t j = currentHour; j < currentHour + 2 && precip.size(); j++) {
+    if (precip[j > RAIN_THRESHOLD_MM]) {
+      rainInNext2Hours = true;
+      break;
+    }
+  }
+
   currentTempC = temps[currentHour].as<double>();
   currentHumidity = humidities[currentHour].as<double>();
   currentWindMS = winds[currentHour].as<double>();
   currentPrecipMM = precip[currentHour].as<double>();
-
-  // Optional: store latest values to NVS for use elsewhere
+  currentRadiation = radiation[currentHour].as<double>();
+  currentEt0 = et0_values[currentHour].as<double>();
 }
+
+// ================================
+// Clothes Drying Score Calculator
+// Output range: 0–100
+// ================================
+
+float clamp(float x, float minVal, float maxVal) {
+  if (x < minVal) return minVal;
+  if (x > maxVal) return maxVal;
+  return x;
+}
+
+void generateDryingScore() {
+  // ---- Hard stops ----
+  // rain kills drying
+  // saturated air
+  if (currentPrecipMM > 0.1 || currentHumidity >= 95.0 || currentTempC < 3.0 || rainInNext2Hours) {
+    dryingScore = 0;
+  }
+  // ---- ET0 contribution (0–50 points) ----
+  // 0.00 → 0 points
+  // 0.20 mm/h → 50 points
+  float etScore = clamp(currentEt0 / 0.20, 0.0, 1.0) * 50.0;
+
+  // ---- Solar contribution (0–20 points) ----
+  // 0 W/m² → 0
+  // 500 W/m² → full score
+  float solarScore = clamp(currentRadiation / 500.0, 0.0, 1.0) * 20.0;
+
+  // ---- Wind contribution (0–15 points) ----
+  // 0 m/s → 0
+  // 5 m/s → full score
+  float windScore = clamp(currentWindMS / 5.0, 0.0, 1.0) * 15.0;
+
+  // ---- Humidity penalty (0–15 points) ----
+  // <50% RH → no penalty
+  // 90% RH → max penalty
+  float humidityPenalty = 0.0;
+  if (currentHumidity > 50.0) {
+    humidityPenalty = clamp(
+                        (currentHumidity - 50.0) / 40.0,
+                        0.0,
+                        1.0)
+                      * 15.0;
+  }
+
+  // ---- Temperature modifier (0.6–1.0 multiplier) ----
+  float tempMultiplier = 1.0;
+  if (currentTempC < 10.0) {
+    tempMultiplier = clamp(
+      0.6 + (currentTempC - 3.0) / 7.0 * 0.4,
+      0.6,
+      1.0);
+  }
+
+  // ---- Final score ----
+  dryingScore = etScore + solarScore + windScore - humidityPenalty;
+  dryingScore *= tempMultiplier;
+
+  dryingScore = clamp(dryingScore, 0.0, 100.0);
+}
+
 
 // ---------- Setup ----------
 void setup() {
@@ -336,15 +423,15 @@ void loop() {
 
   if (wifiReady) {
     unsigned long now = millis();
-    
+
     if (!didInitialFetch || now - lastWeatherFetch > WEATHER_INTERVAL) {
-      fetchWeather(latitude, longitude);
+      fetchWeather();
+      generateDryingScore();
       lastWeatherFetch = now;
       didInitialFetch = true;
     }
 
-    if(now - lastDisplayUpdate > 1000)
-    {
+    if (now - lastDisplayUpdate > 1000) {
       displayInformation();
       lastDisplayUpdate = now;
     }
@@ -363,8 +450,7 @@ void oledPrint(const String &text) {
   display.display();
 }
 
-void displayInformation()
-{
+void displayInformation() {
   if (!oledReady) return;
 
   display.clearDisplay();
@@ -426,7 +512,7 @@ void displayInformation()
   display.printf("Rain:  %.1f mm", currentPrecipMM);
 
   display.display();
-} 
+}
 
 
 
