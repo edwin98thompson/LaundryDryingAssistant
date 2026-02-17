@@ -28,8 +28,21 @@ float clamp(float x, float minVal, float maxVal);
 // ================================
 
 void initOLED();
+void printSplashScreen();
+void resetOledForText();
 void oledPrint(const String &text);
-void displayInformation();
+void displayInformation(
+    const String &city, 
+    struct tm *timeinfo,
+    double currentTempC,
+    double currentHumidity,
+    double currentWindMS,
+    double currentPrecipMM,
+    double currentRadiation,
+    double currentEt0,
+    int hoursTillRain,
+    int dryingScore);
+
 void drawProvisioningQR(const String &serviceName, const String &pop);
 
 // ================================

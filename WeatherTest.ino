@@ -124,20 +124,17 @@ void onWiFiEvent(arduino_event_t *event) {
 
 // ---------- Location & Time ----------
 void getLocation() {
-  oledPrint("Getting location");
-
   int attempts = 0;
   int httpCode = -1;
   HTTPClient http;
 
   if(usingAtHome)
   {
-    city = "Bristol";
-    latitude = 51.472465;
-    longitude = -2.558953;
+    city = SECRET_CITY;
+    latitude = SECRET_LATITUDE;
+    longitude = SECRET_LONGITUDE;
 
     Serial.printf("City: %s, Lat: %.4f, Lon: %.4f\n", city.c_str(), latitude, longitude);
-    oledPrint(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
     delay(2000);
     return;
   }
@@ -176,13 +173,12 @@ void getLocation() {
   longitude = doc["longitude"] | 0.0;
 
   Serial.printf("City: %s, Lat: %.4f, Lon: %.4f\n", city.c_str(), latitude, longitude);
-  oledPrint(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
+  // oledPrint(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
   delay(2000);
 }
 
 void syncTime() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  oledPrint("Syncing time");
 
   struct tm timeinfo;
   int retries = 0;
@@ -195,10 +191,12 @@ void syncTime() {
 
   if (retries >= 20) {
     Serial.println("[TIME] Failed to sync time");
-    oledPrint("Failed to sync time");
+    display.println("Failed to sync time");
+    display.display();
   } else {
     Serial.println("[TIME] Time synced");
-    oledPrint("Time synced");
+    display.println("Time synced");
+    display.display();
   }
   delay(1000);
 }
@@ -325,7 +323,10 @@ void setup() {
   delay(300);
 
   initOLED();
-  oledPrint("Init WiFi...");
+  printSplashScreen();
+  resetOledForText();
+  display.println("Init WiFi...");
+  display.display();
 
   if(!usingAtHome)
   {
@@ -362,6 +363,8 @@ void setup() {
     }
 
     Serial.println("\nConnected to WiFi network");
+    display.println("Connected to WiFi network");
+    display.display();
     wifiJustConnected = true;
     wifiReady = true;
   }
@@ -379,8 +382,12 @@ void loop() {
     // give some time for wifi to get going
     delay(500);
     wifiJustConnected = false;
-    oledPrint("WiFi connected");
+    display.println("Getting location");
+    display.display();
     getLocation();
+    display.println(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
+    display.display();
+
     syncTime();
     didInitialFetch = false;
   }
@@ -398,13 +405,20 @@ void loop() {
       String displayText = "drying score: " + String(dryingScore);
 
       Serial.println(dryingScore);
-      oledPrint(displayText);
+      // oledPrint(displayText);
     }
 
     if (now - lastDisplayUpdate > 1000) {
-      // displayInformation();  // use OLED display logic in DryingStation.cpp
-      lastDisplayUpdate = now;
+        struct tm timeinfo;
+
+        if (getLocalTime(&timeinfo)) {
+            displayInformation(city, &timeinfo, currentTempC, currentHumidity, currentWindMS, 
+                                currentPrecipMM, currentRadiation, currentEt0, hoursTillRain, dryingScore);
+        }
+
+        lastDisplayUpdate = now;
     }
+
   }
 
   checkButtonState();
