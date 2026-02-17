@@ -43,7 +43,7 @@ void generateDryingScore(
     double currentPrecipMM,
     double currentRadiation,
     double currentEt0,
-    bool rainInNext2Hours,
+    int hoursTillRain,
     int &dryingScore
 );
 

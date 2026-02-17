@@ -49,6 +49,11 @@ void oledPrint(const String &text) {
   display.display();
 }
 
+void printSplashScreen()
+{
+  
+}
+
 void drawProvisioningQR(const String &serviceName, const String &pop) {
   QRCode qrcode;
   uint8_t qrcodeData[qrcode_getBufferSize(3)];  // Version 3 fits OLED nicely
@@ -107,11 +112,11 @@ void generateDryingScore(
     double currentPrecipMM,
     double currentRadiation,
     double currentEt0,
-    bool rainInNext2Hours,
+    int hoursTillRain,
     int &dryingScore
 ) {
   // Hard stops
-  if (currentPrecipMM > 0.1 || currentHumidity >= 95.0 || currentTempC < 3.0 || rainInNext2Hours) {
+  if (currentPrecipMM > 0.1 || currentHumidity >= 95.0 || currentTempC < 3.0 || hoursTillRain <= 2) {
     dryingScore = 0;
     return;
   }
