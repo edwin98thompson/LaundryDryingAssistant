@@ -1,9 +1,15 @@
 #include <WiFi.h>
-#include <WiFiProv.h>
+// #include <WiFiProv.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "arduino_secrets.h"
 #include "time.h"
 #include "DryingStation.h"  // OLED, clamp, and drying score
+
+bool usingAtHome = true;
+
+const char* ssid = SECRET_SSID;
+const char* pass = SECRET_PASS;
 
 RTC_DATA_ATTR bool forceProvisioning = false;
 
@@ -44,8 +50,7 @@ double currentWindMS = NAN;
 double currentPrecipMM = NAN;
 double currentRadiation = NAN;
 double currentEt0 = NAN;
-bool rainInNext2Hours = false;
-
+int hoursTillRain = 0;
 int dryingScore = 0;
 
 // ---------- Wi-Fi Event Handler ----------
@@ -79,43 +84,43 @@ void onWiFiEvent(arduino_event_t *event) {
 }
 
 // ---------- Provisioning Startup ----------
-void startProvisioning() {
-  Serial.println("[SYS] Starting BLE provisioning");
+// void startProvisioning() {
+//   Serial.println("[SYS] Starting BLE provisioning");
 
-  delay(500);
+//   delay(500);
 
-  WiFiProv.beginProvision(
-    NETWORK_PROV_SCHEME_BLE,
-    NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
-    NETWORK_PROV_SECURITY_1,
-    POP,
-    SERVICE_NAME,
-    SERVICE_KEY,
-    SERVICE_UUID,
-    RESET_PROVISIONED);
+//   WiFiProv.beginProvision(
+//     NETWORK_PROV_SCHEME_BLE,
+//     NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
+//     NETWORK_PROV_SECURITY_1,
+//     POP,
+//     SERVICE_NAME,
+//     SERVICE_KEY,
+//     SERVICE_UUID,
+//     RESET_PROVISIONED);
 
-  // QR code for app scanning
-  Serial.println("[SYS] QR code for Serial Monitor (scan with phone):");
-  WiFiProv.printQR(SERVICE_NAME, POP, "ble");
-  Serial.println("[SYS] End of QR code");
-  //drawProvisioningQR(SERVICE_NAME, POP);
-}
+//   // QR code for app scanning
+//   Serial.println("[SYS] QR code for Serial Monitor (scan with phone):");
+//   WiFiProv.printQR(SERVICE_NAME, POP, "ble");
+//   Serial.println("[SYS] End of QR code");
+//   //drawProvisioningQR(SERVICE_NAME, POP);
+// }
 
-void reprovisionDevice() {
-  Serial.println("[SYS] Reprovisioning requested");
+// void reprovisionDevice() {
+//   Serial.println("[SYS] Reprovisioning requested");
 
-  oledPrint("Factory Reset\nReprovisioning");
-  delay(1000);
+//   oledPrint("Factory Reset\nReprovisioning");
+//   delay(1000);
 
-  forceProvisioning = true;
+//   forceProvisioning = true;
 
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(true, true);
-  WiFi.mode(WIFI_OFF);
+//   WiFi.setAutoReconnect(false);
+//   WiFi.disconnect(true, true);
+//   WiFi.mode(WIFI_OFF);
 
-  delay(1000);
-  ESP.restart();
-}
+//   delay(1000);
+//   ESP.restart();
+// }
 
 // ---------- Location & Time ----------
 void getLocation() {
@@ -124,6 +129,18 @@ void getLocation() {
   int attempts = 0;
   int httpCode = -1;
   HTTPClient http;
+
+  if(usingAtHome)
+  {
+    city = "Bristol";
+    latitude = 51.472465;
+    longitude = -2.558953;
+
+    Serial.printf("City: %s, Lat: %.4f, Lon: %.4f\n", city.c_str(), latitude, longitude);
+    oledPrint(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
+    delay(2000);
+    return;
+  }
 
   while(attempts < httpGetRetries)
   {
@@ -245,10 +262,11 @@ void fetchWeather() {
   JsonArray et0_values = doc["hourly"]["et0_fao_evapotranspiration"].as<JsonArray>();
 
   // Rain detection
-  rainInNext2Hours = false;
-  for (size_t j = currentHour; j < currentHour + 2 && j < precip.size(); j++) {
+  hoursTillRain = 12;
+  for (size_t j = currentHour; j < currentHour + 12 && j < precip.size(); j++) {
     if (precip[j].as<double>() > RAIN_THRESHOLD_MM) {
-      rainInNext2Hours = true;
+      hoursTillRain = j - currentHour;
+      Serial.println("Rain expected in " + String(hoursTillRain) + " hours");
       break;
     }
   }
@@ -286,7 +304,7 @@ void checkButtonState()
     if (!longPressHandled && (millis() - pressStartTime >= LONG_PRESS_TIME)) {
       Serial.println("Long press detected!");
       longPressHandled = true; // Prevents repeated triggers
-      reprovisionDevice();
+      //  reprovisionDevice();
     }
   } 
   // Button is released
@@ -308,25 +326,44 @@ void setup() {
 
   initOLED();
   oledPrint("Init WiFi...");
-  WiFi.onEvent(onWiFiEvent);
 
-  // HARD stop WiFi before provisioning
-  WiFi.mode(WIFI_OFF);
-  WiFi.setAutoReconnect(false);
-  delay(500);
+  if(!usingAtHome)
+  {
+    // WiFi.onEvent(onWiFiEvent);
 
-  if (forceProvisioning) {
-    Serial.println("[SYS] Forced provisioning mode");
-    forceProvisioning = false;
-    startProvisioning();
-    return;
+    // // HARD stop WiFi before provisioning
+    // WiFi.mode(WIFI_OFF);
+    // WiFi.setAutoReconnect(false);
+    // delay(500);
+
+    // if (forceProvisioning) {
+    //   Serial.println("[SYS] Forced provisioning mode");
+    //   forceProvisioning = false;
+    //   startProvisioning();
+    //   return;
+    // }
+
+    // if (WiFi.status() == WL_CONNECTED) {
+    //   Serial.println("[SYS] Already provisioned, connecting to Wi-Fi");
+    //   WiFi.begin();
+    // } else {
+    //   startProvisioning();
+    // }
   }
+  else
+  {
+    WiFi.begin(ssid, pass);
+    Serial.println("\nConnecting with hard coded credentials");
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("[SYS] Already provisioned, connecting to Wi-Fi");
-    WiFi.begin();
-  } else {
-    startProvisioning();
+    while(WiFi.status() != WL_CONNECTED)
+    {
+      Serial.print(".");
+      delay(500);
+    }
+
+    Serial.println("\nConnected to WiFi network");
+    wifiJustConnected = true;
+    wifiReady = true;
   }
 }
 
@@ -354,7 +391,7 @@ void loop() {
     if (!didInitialFetch || now - lastWeatherFetch > WEATHER_INTERVAL) {
       fetchWeather();
       generateDryingScore(currentTempC, currentHumidity, currentWindMS, currentPrecipMM,
-                          currentRadiation, currentEt0, rainInNext2Hours, dryingScore);
+                          currentRadiation, currentEt0, hoursTillRain, dryingScore);
       lastWeatherFetch = now;
       didInitialFetch = true;
 
