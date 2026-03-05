@@ -1,15 +1,16 @@
 #include <WiFi.h>
-// #include <WiFiProv.h>
+#include <WiFiProv.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "arduino_secrets.h"
 #include "time.h"
 #include "DryingStation.h"  // OLED, clamp, and drying score
 
+// Set to false in a production setting
 bool usingAtHome = true;
 
-const char* ssid = SECRET_SSID;
-const char* pass = SECRET_PASS;
+const char *ssid = SECRET_SSID;
+const char *pass = SECRET_PASS;
 
 RTC_DATA_ATTR bool forceProvisioning = false;
 
@@ -28,7 +29,7 @@ uint8_t SERVICE_UUID[16] = {
 
 // -- Control Button ------------------
 const int pushButton = 23;
-const unsigned long LONG_PRESS_TIME = 5000; // Duration in milliseconds
+const unsigned long LONG_PRESS_TIME = 5000;  // Duration in milliseconds
 
 unsigned long pressStartTime = 0;
 bool isPressing = false;
@@ -84,43 +85,42 @@ void onWiFiEvent(arduino_event_t *event) {
 }
 
 // ---------- Provisioning Startup ----------
-// void startProvisioning() {
-//   Serial.println("[SYS] Starting BLE provisioning");
+void startProvisioning() {
+  Serial.println("[SYS] Starting BLE provisioning");
 
-//   delay(500);
+  delay(500);
 
-//   WiFiProv.beginProvision(
-//     NETWORK_PROV_SCHEME_BLE,
-//     NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
-//     NETWORK_PROV_SECURITY_1,
-//     POP,
-//     SERVICE_NAME,
-//     SERVICE_KEY,
-//     SERVICE_UUID,
-//     RESET_PROVISIONED);
+  WiFiProv.beginProvision(
+    NETWORK_PROV_SCHEME_BLE,
+    NETWORK_PROV_SCHEME_HANDLER_FREE_BLE,
+    NETWORK_PROV_SECURITY_1,
+    POP,
+    SERVICE_NAME,
+    SERVICE_KEY,
+    SERVICE_UUID,
+    RESET_PROVISIONED);
 
-//   // QR code for app scanning
-//   Serial.println("[SYS] QR code for Serial Monitor (scan with phone):");
-//   WiFiProv.printQR(SERVICE_NAME, POP, "ble");
-//   Serial.println("[SYS] End of QR code");
-//   //drawProvisioningQR(SERVICE_NAME, POP);
-// }
+  // QR code for app scanning
+  Serial.println("[SYS] QR code for Serial Monitor (scan with phone):");
+  WiFiProv.printQR(SERVICE_NAME, POP, "ble");
+  Serial.println("[SYS] End of QR code");
+}
 
-// void reprovisionDevice() {
-//   Serial.println("[SYS] Reprovisioning requested");
+void reprovisionDevice() {
+  Serial.println("[SYS] Reprovisioning requested");
 
-//   oledPrint("Factory Reset\nReprovisioning");
-//   delay(1000);
+  oledPrint("Factory Reset\nReprovisioning");
+  delay(1000);
 
-//   forceProvisioning = true;
+  forceProvisioning = true;
 
-//   WiFi.setAutoReconnect(false);
-//   WiFi.disconnect(true, true);
-//   WiFi.mode(WIFI_OFF);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
 
-//   delay(1000);
-//   ESP.restart();
-// }
+  delay(1000);
+  ESP.restart();
+}
 
 // ---------- Location & Time ----------
 void getLocation() {
@@ -128,8 +128,7 @@ void getLocation() {
   int httpCode = -1;
   HTTPClient http;
 
-  if(usingAtHome)
-  {
+  if (usingAtHome) {
     city = SECRET_CITY;
     latitude = SECRET_LATITUDE;
     longitude = SECRET_LONGITUDE;
@@ -139,8 +138,7 @@ void getLocation() {
     return;
   }
 
-  while(attempts < httpGetRetries)
-  {
+  while (attempts < httpGetRetries) {
     http.begin("https://ipwho.is/");
 
     httpCode = http.GET();
@@ -177,6 +175,7 @@ void getLocation() {
   delay(2000);
 }
 
+// see if this is the best way to sync time and look into reusability
 void syncTime() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
@@ -203,23 +202,27 @@ void syncTime() {
 
 // ---------- Weather Fetch ----------
 void fetchWeather() {
+
+  // ---- Ensure WiFi is connected ----
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[WEATHER] Wi-Fi not connected");
     return;
   }
 
+  // ---- Build Open-Meteo URL ----
   String url = "https://api.open-meteo.com/v1/forecast?";
   url += "latitude=" + String(latitude, 6);
   url += "&longitude=" + String(longitude, 6);
-  url += "&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,shortwave_radiation,et0_fao_evapotranspiration";
-  url += "&temperature_unit=celsius&timezone=auto";
+  url += "&minutely_15=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,shortwave_radiation";
+  url += "&hourly=et0_fao_evapotranspiration";
+  url += "&temperature_unit=celsius&timezone=auto";  // Return timestamps in local timezone
+  url += "&forecast_days=1";
 
   int attempts = 0;
   int httpCode = -1;
   HTTPClient http;
 
-  while(attempts < httpGetRetries)
-  {
+  while (attempts < httpGetRetries) {
     http.begin(url);
 
     httpCode = http.GET();
@@ -249,62 +252,75 @@ void fetchWeather() {
 
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) return;
-  int currentHour = timeinfo.tm_hour;
 
-  // Access hourly data
-  JsonArray temps = doc["hourly"]["temperature_2m"].as<JsonArray>();
-  JsonArray winds = doc["hourly"]["wind_speed_10m"].as<JsonArray>();
-  JsonArray humidities = doc["hourly"]["relative_humidity_2m"].as<JsonArray>();
-  JsonArray precip = doc["hourly"]["precipitation"].as<JsonArray>();
-  JsonArray radiation = doc["hourly"]["shortwave_radiation"].as<JsonArray>();
+  int currentHour = timeinfo.tm_hour;
+  int currentMinute = timeinfo.tm_min;
+
+  int roundedMinute = ((currentMinute + 14) / 15) * 15;
+
+  if (roundedMinute == 60) {
+    roundedMinute = 0;
+    currentHour++;
+  }
+
+  int currentQuarter = roundedMinute / 15;
+  int currentIndex = currentHour * 4 + currentQuarter;
+
+  // Access data
+  JsonArray temps = doc["minutely_15"]["temperature_2m"].as<JsonArray>();
+  JsonArray winds = doc["minutely_15"]["wind_speed_10m"].as<JsonArray>();
+  JsonArray humidities = doc["minutely_15"]["relative_humidity_2m"].as<JsonArray>();
+  JsonArray precip = doc["minutely_15"]["precipitation"].as<JsonArray>();
+  JsonArray radiation = doc["minutely_15"]["shortwave_radiation"].as<JsonArray>();
   JsonArray et0_values = doc["hourly"]["et0_fao_evapotranspiration"].as<JsonArray>();
+
+  if (currentIndex >= temps.size()) return;
 
   // Rain detection
   hoursTillRain = 12;
-  for (size_t j = currentHour; j < currentHour + 12 && j < precip.size(); j++) {
-    if (precip[j].as<double>() > RAIN_THRESHOLD_MM) {
-      hoursTillRain = j - currentHour;
+  for (size_t j = currentIndex; j < currentIndex + 48 && j < precip.size(); j++) {
+    if (precip[j].as<float>() > RAIN_THRESHOLD_MM) {
+      hoursTillRain = (j - currentIndex) / 4;
       Serial.println("Rain expected in " + String(hoursTillRain) + " hours");
       break;
     }
   }
 
-  currentTempC = temps[currentHour].as<double>();
-  currentHumidity = humidities[currentHour].as<double>();
-  currentWindMS = winds[currentHour].as<double>();
-  currentPrecipMM = precip[currentHour].as<double>();
-  currentRadiation = radiation[currentHour].as<double>();
-  currentEt0 = et0_values[currentHour].as<double>();
+  currentTempC = temps[currentIndex].as<float>();
+  currentHumidity = humidities[currentIndex].as<float>();
+  currentWindMS = winds[currentIndex].as<float>();
+  currentPrecipMM = precip[currentIndex].as<float>();
+  currentRadiation = radiation[currentIndex].as<float>();
+  currentEt0 = et0_values[currentHour].as<float>();
 
   Serial.printf("[WEATHER] H%02d | T=%.2fC H=%.1f%% W=%.2fm/s P=%.2fmm R=%.1f ET0=%.3f\n",
-              currentHour,
-              currentTempC,
-              currentHumidity,
-              currentWindMS,
-              currentPrecipMM,
-              currentRadiation,
-              currentEt0);
+                currentHour,
+                currentTempC,
+                currentHumidity,
+                currentWindMS,
+                currentPrecipMM,
+                currentRadiation,
+                currentEt0);
 }
 
-void checkButtonState()
-{
+void checkButtonState() {
   int buttonState = digitalRead(pushButton);
 
   // Button is pressed (LOW due to INPUT_PULLUP)
   if (buttonState == LOW) {
     if (!isPressing) {
       isPressing = true;
-      pressStartTime = millis(); // Start timer
+      pressStartTime = millis();  // Start timer
       longPressHandled = false;
     }
 
     // Check if enough time has passed while still held
     if (!longPressHandled && (millis() - pressStartTime >= LONG_PRESS_TIME)) {
       Serial.println("Long press detected!");
-      longPressHandled = true; // Prevents repeated triggers
-      //  reprovisionDevice();
+      longPressHandled = true;  // Prevents repeated triggers
+      reprovisionDevice();
     }
-  } 
+  }
   // Button is released
   else {
     if (isPressing) {
@@ -328,36 +344,32 @@ void setup() {
   display.println("Init WiFi...");
   display.display();
 
-  if(!usingAtHome)
-  {
-    // WiFi.onEvent(onWiFiEvent);
+  if (!usingAtHome) {
+    WiFi.onEvent(onWiFiEvent);
 
-    // // HARD stop WiFi before provisioning
-    // WiFi.mode(WIFI_OFF);
-    // WiFi.setAutoReconnect(false);
-    // delay(500);
+    // HARD stop WiFi before provisioning
+    WiFi.mode(WIFI_OFF);
+    WiFi.setAutoReconnect(false);
+    delay(500);
 
-    // if (forceProvisioning) {
-    //   Serial.println("[SYS] Forced provisioning mode");
-    //   forceProvisioning = false;
-    //   startProvisioning();
-    //   return;
-    // }
+    if (forceProvisioning) {
+      Serial.println("[SYS] Forced provisioning mode");
+      forceProvisioning = false;
+      startProvisioning();
+      return;
+    }
 
-    // if (WiFi.status() == WL_CONNECTED) {
-    //   Serial.println("[SYS] Already provisioned, connecting to Wi-Fi");
-    //   WiFi.begin();
-    // } else {
-    //   startProvisioning();
-    // }
-  }
-  else
-  {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("[SYS] Already provisioned, connecting to Wi-Fi");
+      WiFi.begin();
+    } else {
+      startProvisioning();
+    }
+  } else {
     WiFi.begin(ssid, pass);
     Serial.println("\nConnecting with hard coded credentials");
 
-    while(WiFi.status() != WL_CONNECTED)
-    {
+    while (WiFi.status() != WL_CONNECTED) {
       Serial.print(".");
       delay(500);
     }
@@ -385,7 +397,7 @@ void loop() {
     display.println("Getting location");
     display.display();
     getLocation();
-    display.println(city + "\nLat:" + String(latitude,4) + " Lon:" + String(longitude,4));
+    display.println(city + "\nLat:" + String(latitude, 4) + " Lon:" + String(longitude, 4));
     display.display();
 
     syncTime();
@@ -405,20 +417,19 @@ void loop() {
       String displayText = "drying score: " + String(dryingScore);
 
       Serial.println(dryingScore);
-      // oledPrint(displayText);
     }
 
     if (now - lastDisplayUpdate > 1000) {
-        struct tm timeinfo;
 
-        if (getLocalTime(&timeinfo)) {
-            displayInformation(city, &timeinfo, currentTempC, currentHumidity, currentWindMS, 
-                                currentPrecipMM, currentRadiation, currentEt0, hoursTillRain, dryingScore);
-        }
+      time_t now = time(nullptr);
+      struct tm timeinfo;
+      localtime_r(&now, &timeinfo);
 
-        lastDisplayUpdate = now;
+      displayInformation(city, &timeinfo, currentTempC, currentHumidity, currentWindMS,
+                         currentPrecipMM, currentRadiation, currentEt0, hoursTillRain, dryingScore);
+
+      lastDisplayUpdate = now;
     }
-
   }
 
   checkButtonState();
