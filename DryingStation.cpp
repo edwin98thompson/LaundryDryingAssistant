@@ -2,8 +2,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "qrcode_library.h"
-#include "qrcode.h"
+// #include "qrcode_library.h"
+// #include "qrcode.h"
 
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -387,41 +387,6 @@ void printSplashScreen()
   display.display();
 
   delay(5000);
-}
-
-void drawProvisioningQR(const String &serviceName, const String &pop) {
-  QRCode qrcode;
-  uint8_t qrcodeData[qrcode_getBufferSize(3)];  // Version 3 fits OLED nicely
-
-  String payload =
-    "{\"ver\":\"v1\",\"name\":\"" + String(serviceName) +
-    "\",\"pop\":\"" + String(pop) +
-    "\",\"transport\":\"ble\"}";
-
-  qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, payload.c_str());
-
-  display.clearDisplay();
-
-  const int scale = 2;            // QR pixel scaling
-  const int qrSize = qrcode.size * scale;
-  const int xOffset = (128 - qrSize) / 2;
-  const int yOffset = (64 - qrSize) / 2;
-
-  for (int y = 0; y < qrcode.size; y++) {
-    for (int x = 0; x < qrcode.size; x++) {
-      if (qrcode_getModule(&qrcode, x, y)) {
-        display.fillRect(
-          xOffset + x * scale,
-          yOffset + y * scale,
-          scale,
-          scale,
-          SSD1306_WHITE
-        );
-      }
-    }
-  }
-
-  display.display();
 }
 
 void resetOledForText()

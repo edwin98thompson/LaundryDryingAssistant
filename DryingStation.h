@@ -43,8 +43,6 @@ void displayInformation(
     int hoursTillRain,
     int dryingScore);
 
-void drawProvisioningQR(const String &serviceName, const String &pop);
-
 // ================================
 // Drying Score Functions
 // ================================
