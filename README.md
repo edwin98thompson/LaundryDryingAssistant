@@ -1,4 +1,3 @@
-![device](https://github.com/user-attachments/assets/d8222aca-1c46-49d3-b932-56836d0b49da)
 This project is a simple application that gets local weather data and puts it through an algorithm to generate a drying score that determines how suitable the climate
 is to dry your clothes outside. The idea for this came to me when the weather was dry but mild and I wasnt sure if there was a benefit to drying the clothes outside
 compared to inside. 
